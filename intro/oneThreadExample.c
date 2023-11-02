@@ -39,11 +39,77 @@ double mod(vector a)
     return sqrt(a.x * a.x + a.y * a.y);
 }
 
+void computeAccelerations()
+{
+    int i, j;
+
+    for (i = 0; i < bodies; i++)
+    {
+        accelerations[i].x = 0;
+        accelerations[i].y = 0;
+        for (j = 0; j < bodies; j++)
+        {
+            if (i != j)
+            {
+                //a = G * m_j / |r|^3 * (r_j - r_i)
+                //where ∣r∣- the distance between the two bodies, so mod(sub(i,j)) - scalar distance between bodies i and j
+                accelerations[i] = addVectors(accelerations[i], scaleVector(GravConstant * masses[j] / pow(mod(subtractVectors(positions[i], positions[j])), 3), subtractVectors(positions[j], positions[i])));
+            }
+        }
+    }
+}
+
+void computePositions()
+{
+    int i;
+
+    for (i = 0; i < bodies; i++)
+        //х=х0+v*t
+        positions[i] = addVectors(positions[i], scaleVector(DT,velocities[i]));
+}
+
+void computeVelocities()
+{
+    int i;
+
+    for (i = 0; i < bodies; i++)
+        //V = V0+a*t
+        velocities[i] = addVectors(velocities[i], scaleVector(DT, accelerations[i]));
+}
+
+void resolveCollisions()
+{
+    int i, j;
+
+    for (i = 0; i < bodies - 1; i++)
+        for (j = i + 1; j < bodies; j++)
+        {
+            if (positions[i].x == positions[j].x && positions[i].y == positions[j].y)
+            {
+                //If bodies collide, then we just V = V0 * -1, same speed to the opposite direction
+                vector temp = velocities[i];
+                velocities[i] = velocities[j];
+                velocities[j] = temp;
+            }
+        }
+}
+
+void simulate()
+{
+    computeAccelerations();
+    computePositions();
+    computeVelocities();
+    resolveCollisions();
+}
+
 void initiateSystem(char *fileName)
 {
     int i;
     FILE *fp = fopen(fileName, "r");
-
+    if (fp == NULL) {
+        perror("Error opening file");
+        exit(1);
+    }
     fscanf(fp, "%lf%d%d", &GravConstant, &bodies, &timeSteps);
 
     masses = (double *)malloc(bodies * sizeof(double));
@@ -61,68 +127,10 @@ void initiateSystem(char *fileName)
     fclose(fp);
 }
 
-void resolveCollisions()
-{
-    int i, j;
-
-    for (i = 0; i < bodies - 1; i++)
-        for (j = i + 1; j < bodies; j++)
-        {
-            if (positions[i].x == positions[j].x && positions[i].y == positions[j].y)
-            {
-                vector temp = velocities[i];
-                velocities[i] = velocities[j];
-                velocities[j] = temp;
-            }
-        }
-}
-
-void computeAccelerations()
-{
-    int i, j;
-
-    for (i = 0; i < bodies; i++)
-    {
-        accelerations[i].x = 0;
-        accelerations[i].y = 0;
-        for (j = 0; j < bodies; j++)
-        {
-            if (i != j)
-            {
-                accelerations[i] = addVectors(accelerations[i], scaleVector(GravConstant * masses[j] / pow(mod(subtractVectors(positions[i], positions[j])), 3), subtractVectors(positions[j], positions[i])));
-            }
-        }
-    }
-}
-
-void computeVelocities()
-{
-    int i;
-
-    for (i = 0; i < bodies; i++)
-        velocities[i] = addVectors(velocities[i], scaleVector(DT, accelerations[i]));
-}
-
-void computePositions()
-{
-    int i;
-
-    for (i = 0; i < bodies; i++)
-        positions[i] = addVectors(positions[i], scaleVector(DT,velocities[i]));
-}
-
-void simulate()
-{
-    computeAccelerations();
-    computePositions();
-    computeVelocities();
-    resolveCollisions();
-}
-
 int main(int argC, char *argV[])
 {
     int i, j;
-
+    printf("%s", &argC);
     if (argC != 2)
         printf("Usage : %s <file name containing system configuration data>", argV[0]);
     else

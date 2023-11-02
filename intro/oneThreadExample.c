@@ -136,14 +136,24 @@ int main(int argC, char *argV[])
     else
     {
         initiateSystem(argV[1]);
-        printf("Body   :     x              y           vx              vy   ");
-        for (i = 0; i < timeSteps; i++)
-        {
-            printf("\nCycle %d\n", i + 1);
-            simulate();
-            for (j = 0; j < bodies; j++)
-                printf("Body %d : %lf\t%lf\t%lf\t%lf\n", j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+        FILE *outputFile = fopen("intro/oneThreadExample-output", "w");
+        if (outputFile == NULL) {
+            perror("Error opening output file");
+            return 1; 
         }
+
+        fprintf(outputFile, "Body   :     x              y           vx              vy");
+        
+        for (i = 0; i < timeSteps; i++) {
+            fprintf(outputFile, "\nCycle %d\n", i + 1);
+            simulate();
+            for (j = 0; j < bodies; j++) {
+                fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
+                        j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+            }
+        }
+        fclose(outputFile);
+
     }
     return 0;
 }

@@ -21,9 +21,22 @@ int compareFiles(FILE *fp1, FILE *fp2) {
         }
     }
 
-    if (!feof(fp1) || !feof(fp2)) {
-        puts("The files have different number of lines.");
+    //    if (!feof(fp1) || !feof(fp2)) {
+    //        puts("The files have different number of lines.");
+    //        diffCount++;
+    //    } // Bad kitty.
+
+    while (fgets(line1, MAX_LINE_LENGTH, fp1) != NULL) {
+        lineNum++;
         diffCount++;
+        printf("Difference found at line %d:\n", lineNum);
+        printf("< %s>\n", line1);
+    }
+    while (fgets(line2, MAX_LINE_LENGTH, fp2) != NULL) {
+        lineNum++;
+        diffCount++;
+        printf("Difference found at line %d:\n", lineNum);
+        printf("< %s>\n", line2);
     }
 
     return diffCount;

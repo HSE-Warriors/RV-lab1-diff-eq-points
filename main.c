@@ -81,7 +81,6 @@ vector normalize(vector a) {
     return c;
 }
 
-
 double distanceBetweenVectors(vector a, vector b) {
     return mod(subtractVectors(a, b));
 }
@@ -266,11 +265,61 @@ void initiateSystem(char *fileName, int numberOfThreads)
     velOutputFile = fopen("velocitiesOutput", "w");
 }
 
+typedef struct {
+    int dimension;
+    double* elements;
+} TriangularMatrix;
+
+TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
+    TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
+    matrix->dimension = matrixDimension;
+    matrix->elements = (double*)malloc(matrixDimension * (matrixDimension + 1) / 2 * sizeof(double));
+    if (matrix->elements == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return matrix;
+}
+
+int getIndex(int i, int j, int n) {
+    return (i * n - (i - 1) * i / 2 + j - i);
+}
+
+void SetTriangularMatrixElement(TriangularMatrix* matrix, double element, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Невозможно вставить элемент вне верхней треугольной матрицы.\n");
+        return;
+    }
+
+    matrix->elements[getIndex(i, j, matrix->dimension)] = element;
+}
+
+double GetTriangularMatrixElement(TriangularMatrix* matrix, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Невозможно взять элемент вне верхней треугольной матрицы.\n");
+        return 0;
+    }
+    return matrix->elements[getIndex(i, j, matrix->dimension)];
+}
+
+void ClearTriangularMatrix(TriangularMatrix* matrix) {
+    if (matrix != NULL) {
+        if (matrix->elements != NULL) {
+            free(matrix->elements);
+            matrix->elements = NULL;
+        }
+        matrix->dimension = 0;
+    }
+
+    free(matrix);
+}
+
 int main(int argC, char *argV[])
 {
-    printf("%s", &argC);
+    printf("%d", argC);
     if (argC != 3)
-        printf("Usage : %s <file name containing system configuration data>", argV[0]);
+        printf("Usage : %s <file name containing system configuration data>\n", argV[0]);
     else
     {
         int numberOfThreads = atoi(argV[2]);

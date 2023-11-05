@@ -24,8 +24,91 @@ int threadsCount;
 int extraBodiesToLastThread;
 pthread_barrier_t barrier;
 pthread_t* pthread_arr;
+pthread_mutex_t *bodiesMutexes;
+
+vector addVectors(vector a, vector b)
+{
+    vector c = {a.x + b.x, a.y + b.y};
+    return c;
+}
+
+vector scaleVector(double b, vector a)
+{
+    vector c = {b * a.x, b * a.y};
+    return c;
+}
+
+vector subtractVectors(vector a, vector b)
+{
+    vector c = {a.x - b.x, a.y - b.y};
+    return c;
+}
+
+double mod(vector a)
+{
+    return sqrt(a.x * a.x + a.y * a.y);
+}
+
+vector normalize(vector a) {
+    double length = mod(a);
+    if (length == 0) {
+        vector zero = {0.0, 0.0};
+        return zero;
+    }
+    vector c = {a.x / length, a.y / length};
+    return c;
+}
+
+double distanceBetweenVectors(vector a, vector b, int a_index, int b_index) {
+    //TODO
+    //If (distance is counted) {
+    // return it    
+    //} else {
+        return mod(subtractVectors(a, b));
+    //}
+}
+
+void countAcceleration(int i, int j) {
+    int firstMass = masses[i];
+    int secondMass = masses[j];
+    vector firstPosition = positions[i];
+    vector secondPosition = positions[j];
+
+    double distance = distanceBetweenVectors(firstPosition, secondPosition, i, j);
+    double force = GravConstant * firstMass * secondMass / (distance * distance);
+    //Count force`s vector to correctly count accelerations
+    vector forceVector = scaleVector(force, normalize(subtractVectors(secondPosition, firstPosition)));
+
+    vector firstNewAcceleration = scaleVector(1.0 / firstMass, forceVector);
+    vector secondNewAcceleration = scaleVector(-1.0 / secondMass, forceVector);
+    //Save accelerations
+    pthread_mutex_lock(&bodiesMutexes[i]);
+    accelerations[i] = addVectors(accelerations[i], firstNewAcceleration);
+    pthread_mutex_unlock(&bodiesMutexes[i]);
+    pthread_mutex_lock(&bodiesMutexes[j]);
+    accelerations[j] = addVectors(accelerations[j], secondNewAcceleration);
+    pthread_mutex_unlock(&bodiesMutexes[j]);
+}
 
 
+void* routine(void *threadArgs){
+    thread_args_t *args = (thread_args_t *)threadArgs;
+
+    printf("Thread working on index range [%d, %d]\n", args->startIndex, args->endIndex);
+    for (long t = 0; t < timeSteps; t++) {
+        //Count distances to other threads
+        for (long i = 0; i < args->startIndex; i++) {
+            //count distances
+        }
+        for (long i = args->startIndex; i <= args->endIndex; i++) {
+            for (long j = i+1; j <= args->endIndex; j++) {
+                countAcceleration(i, j);
+            }
+        }
+        pthread_barrier_wait(&barrier);
+    }
+    free(args);
+}
 
 void initiateSystem(char *fileName, int numberOfThreads)
 {
@@ -44,6 +127,7 @@ void initiateSystem(char *fileName, int numberOfThreads)
     positions = (vector *)malloc(bodies * sizeof(vector));
     velocities = (vector *)malloc(bodies * sizeof(vector));
     accelerations = (vector *)malloc(bodies * sizeof(vector));
+    bodiesMutexes = (pthread_mutex_t *)malloc(bodies * sizeof(pthread_mutex_t));
 
 
     for (i = 0; i < bodies; i++)
@@ -51,6 +135,7 @@ void initiateSystem(char *fileName, int numberOfThreads)
         fscanf(fp, "%lf", &masses[i]);
         fscanf(fp, "%lf%lf", &positions[i].x, &positions[i].y);
         fscanf(fp, "%lf%lf", &velocities[i].x, &velocities[i].y);
+        pthread_mutex_init(&bodiesMutexes[i], NULL);
     }
     fclose(fp);
 
@@ -60,24 +145,11 @@ void initiateSystem(char *fileName, int numberOfThreads)
     if (rc != 0) {
         perror("Error with barrier init");
         exit(1);
-    }
-    
+    } 
 }
-
-void* routine(void *args){
-    thread_args_t *thread_args = (thread_args_t *)args;
-
-    printf("Thread working on index range [%d, %d]\n", thread_args->startIndex, thread_args->endIndex);
-    for (long long i = 0; i < timeSteps; i++) {
-        
-    }
-    free(args);
-}
-
 
 int main(int argC, char *argV[])
 {
-    int i, j;
     printf("%s", &argC);
     if (argC != 3)
         printf("Usage : %s <file name containing system configuration data>", argV[0]);
@@ -112,5 +184,8 @@ int main(int argC, char *argV[])
         free(velocities);
         free(accelerations);
         pthread_barrier_destroy(&barrier);
+        for (int i = 0; i < bodies; i++) {
+            pthread_mutex_destroy(&bodiesMutexes[i]);
+        }
     }
 }

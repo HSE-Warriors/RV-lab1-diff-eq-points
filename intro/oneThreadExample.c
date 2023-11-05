@@ -9,9 +9,22 @@ typedef struct
     double x, y;
 } vector;
 
+FILE *accOutputFile;
+FILE *posOutputFile;
+FILE *velOutputFile;
+
+
+
 int bodies, timeSteps;
 double *masses, GravConstant;
 vector *positions, *velocities, *accelerations;
+
+void log_vectors(const char *name, vector *array, size_t length, FILE *outputFile) {
+    for (size_t i = 0; i < length; i++) {
+        fprintf(outputFile, " (%lf, %lf)", array[i].x, array[i].y);
+    }
+    fprintf(outputFile,"\n");
+}
 
 vector addVectors(vector a, vector b)
 {
@@ -94,8 +107,11 @@ void resolveCollisions()
 void simulate()
 {
     computeAccelerations();
+    log_vectors("Accelerations", accelerations, bodies, accOutputFile);
     computePositions();
+    log_vectors("Positions", positions, bodies, posOutputFile);
     computeVelocities();
+    log_vectors("Velocities", velocities, bodies, velOutputFile);
     resolveCollisions();
 }
 
@@ -122,13 +138,17 @@ void initiateSystem(char *fileName)
     }
 
     fclose(fp);
+
+    accOutputFile = fopen("singleAcccelerationsOutput", "w");
+    posOutputFile = fopen("singlePositionsOutput", "w");
+    velOutputFile = fopen("singleVelocitiesOutput", "w");
 }
 
 int main(int argC, char *argV[])
 {
     int i, j;
     printf("%s", &argC);
-    if (argC != 2)
+    if (argC < 2)
         printf("Usage : %s <file name containing system configuration data>", argV[0]);
     else
     {
@@ -150,7 +170,9 @@ int main(int argC, char *argV[])
             }
         }
         fclose(outputFile);
-
+        fclose(accOutputFile);
+        fclose(posOutputFile);
+        fclose(velOutputFile);
     }
     return 0;
 }

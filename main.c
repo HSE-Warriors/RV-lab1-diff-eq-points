@@ -14,6 +14,11 @@ int bodies, timeSteps, bodiesPerThread;
 double *masses, GravConstant;
 vector *positions, *velocities, *accelerations;
 FILE *outputFile;
+int threadsCounter;
+
+FILE *accOutputFile;
+FILE *posOutputFile;
+FILE *velOutputFile;
 
 typedef struct {
     int startIndex;
@@ -25,6 +30,16 @@ int extraBodiesToLastThread;
 pthread_barrier_t barrier;
 pthread_t* pthread_arr;
 pthread_mutex_t *bodiesMutexes;
+pthread_mutex_t threadsCounterMutex;
+
+void log_vectors(const char *name, vector *array, size_t length, FILE *outputFile) {
+    for (size_t i = 0; i < length; i++) {
+        pthread_mutex_lock(&bodiesMutexes[i]);
+        fprintf(outputFile, " (%lf, %lf)", array[i].x, array[i].y);
+        pthread_mutex_unlock(&bodiesMutexes[i]);
+    }
+    fprintf(outputFile,"\n");
+}
 
 vector addVectors(vector a, vector b)
 {
@@ -69,22 +84,30 @@ double distanceBetweenVectors(vector a, vector b, int a_index, int b_index) {
 }
 
 void countAcceleration(int i, int j) {
-    int firstMass = masses[i];
-    int secondMass = masses[j];
-    vector firstPosition = positions[i];
-    vector secondPosition = positions[j];
+    double firstMass, secondMass;
+    vector firstPosition, secondPosition;
+
+    pthread_mutex_lock(&bodiesMutexes[i]);
+    firstMass = masses[i];
+    firstPosition = positions[i];
+    pthread_mutex_unlock(&bodiesMutexes[i]);
+
+    pthread_mutex_lock(&bodiesMutexes[j]);
+    secondMass = masses[j];
+    secondPosition = positions[j];
+    pthread_mutex_unlock(&bodiesMutexes[j]);
 
     double distance = distanceBetweenVectors(firstPosition, secondPosition, i, j);
     double force = GravConstant * firstMass * secondMass / (distance * distance);
-    //Count force`s vector to correctly count accelerations
     vector forceVector = scaleVector(force, normalize(subtractVectors(secondPosition, firstPosition)));
 
     vector firstNewAcceleration = scaleVector(1.0 / firstMass, forceVector);
     vector secondNewAcceleration = scaleVector(-1.0 / secondMass, forceVector);
-    //Save accelerations
+
     pthread_mutex_lock(&bodiesMutexes[i]);
     accelerations[i] = addVectors(accelerations[i], firstNewAcceleration);
     pthread_mutex_unlock(&bodiesMutexes[i]);
+
     pthread_mutex_lock(&bodiesMutexes[j]);
     accelerations[j] = addVectors(accelerations[j], secondNewAcceleration);
     pthread_mutex_unlock(&bodiesMutexes[j]);
@@ -97,27 +120,25 @@ void countPositions(int i) {
 }
 
 void countVelocities(int i) {
-    //V = V0+a*t
+    //V=V0+a*t
     velocities[i] = addVectors(velocities[i], scaleVector(DT, accelerations[i]));
 }
 
 void resolveCollisions(int i) {
-    for (long j = i + 1; j < bodies; j++)
+    for (long j = i + 1; j < bodies; j++) {
+        if (positions[i].x == positions[j].x && positions[i].y == positions[j].y)
         {
-            if (positions[i].x == positions[j].x && positions[i].y == positions[j].y)
-            {
-                //If bodies collide, then we just V = V0 * -1, same speed to the opposite direction
-                pthread_mutex_lock(&bodiesMutexes[i]);
-                pthread_mutex_lock(&bodiesMutexes[j]);
-                vector temp = velocities[i];
-                velocities[i] = velocities[j];
-                velocities[j] = temp;
-                pthread_mutex_unlock(&bodiesMutexes[i]);
-                pthread_mutex_unlock(&bodiesMutexes[j]);
-            }
+            //If bodies collide, then we just V = V0 * -1, same speed to the opposite direction
+            pthread_mutex_lock(&bodiesMutexes[i]);
+            pthread_mutex_lock(&bodiesMutexes[j]);
+            vector temp = velocities[i];
+            velocities[i] = velocities[j];
+            velocities[j] = temp;
+            pthread_mutex_unlock(&bodiesMutexes[i]);
+            pthread_mutex_unlock(&bodiesMutexes[j]);
         }
+    }
 }
-
 
 void* routine(void *threadArgs){
     thread_args_t *args = (thread_args_t *)threadArgs;
@@ -129,26 +150,47 @@ void* routine(void *threadArgs){
             //count distances
         }
         for (long i = args->startIndex; i <= args->endIndex; i++) {
-            for (long j = i+1; j <= args->endIndex; j++) {
+            for (long j = i+1; j <= bodies - 1; j++) {
                 countAcceleration(i, j);
+                printf("Finished count acceleration\n");
             }
         }
-        pthread_barrier_wait(&barrier);
+        int result = pthread_barrier_wait(&barrier);
+        if(result == PTHREAD_BARRIER_SERIAL_THREAD) {
+            log_vectors("Accelerations", accelerations, bodies, accOutputFile);
+            printf("Count acceleration finally finished\n");
+        }
+
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countPositions(i);
+            printf("Finished count positions\n");
+
         }
-        pthread_barrier_wait(&barrier);
+        result = pthread_barrier_wait(&barrier);
+        if(result == PTHREAD_BARRIER_SERIAL_THREAD) {
+            log_vectors("Positions", positions, bodies, posOutputFile);
+            printf("Count positions finally finished\n");
+
+        }
+
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countVelocities(i);
             resolveCollisions(i);
         }
-        int res = pthread_barrier_wait(&barrier);
+        result = pthread_barrier_wait(&barrier);
         //if equal, then last thread finished and now we will fall barrier, like callback onBarrierFell
-        if(res == PTHREAD_BARRIER_SERIAL_THREAD) {
-            fprintf(outputFile, "\nCycle %d\n",  + 1);
+        if(result == PTHREAD_BARRIER_SERIAL_THREAD) {
+            log_vectors("Velocities", velocities, bodies, velOutputFile);
+            fprintf(outputFile, "\nCycle %d\n", t + 1);
             for (int j = 0; j < bodies; j++) {
                 fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
-                        j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+                    j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+            }
+            for (size_t i = 0; i < bodies; ++i) {
+                pthread_mutex_lock(&bodiesMutexes[i]);
+                accelerations[i].x = 0.0;
+                accelerations[i].y = 0.0;
+                pthread_mutex_unlock(&bodiesMutexes[i]);
             }
         }
 
@@ -158,7 +200,6 @@ void* routine(void *threadArgs){
 
 void initiateSystem(char *fileName, int numberOfThreads)
 {
-    int i;
     FILE *fp = fopen(fileName, "r");
     if (fp == NULL) {
         perror("Error opening file");
@@ -175,8 +216,7 @@ void initiateSystem(char *fileName, int numberOfThreads)
     accelerations = (vector *)malloc(bodies * sizeof(vector));
     bodiesMutexes = (pthread_mutex_t *)malloc(bodies * sizeof(pthread_mutex_t));
 
-
-    for (i = 0; i < bodies; i++)
+    for (int i = 0; i < bodies; i++)
     {
         fscanf(fp, "%lf", &masses[i]);
         fscanf(fp, "%lf%lf", &positions[i].x, &positions[i].y);
@@ -185,6 +225,8 @@ void initiateSystem(char *fileName, int numberOfThreads)
     }
     fclose(fp);
 
+    pthread_mutex_init(&threadsCounterMutex, NULL);
+
     threadsCount = numberOfThreads;
     pthread_arr = malloc(threadsCount * sizeof(pthread_t));
     int rc = pthread_barrier_init(&barrier, NULL, threadsCount);
@@ -192,6 +234,10 @@ void initiateSystem(char *fileName, int numberOfThreads)
         perror("Error with barrier init");
         exit(1);
     } 
+
+    accOutputFile = fopen("acccelerationsOutput", "w");
+    posOutputFile = fopen("positionsOutput", "w");
+    velOutputFile = fopen("velocitiesOutput", "w");
 }
 
 int main(int argC, char *argV[])
@@ -233,5 +279,9 @@ int main(int argC, char *argV[])
         for (int i = 0; i < bodies; i++) {
             pthread_mutex_destroy(&bodiesMutexes[i]);
         }
+        pthread_mutex_destroy(&threadsCounterMutex);
+        fclose(accOutputFile);
+        fclose(posOutputFile);
+        fclose(velOutputFile);
     }
 }

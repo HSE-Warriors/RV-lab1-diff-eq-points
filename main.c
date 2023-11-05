@@ -91,6 +91,34 @@ void countAcceleration(int i, int j) {
 }
 
 
+void countPositions(int i) {
+    //х=х0+v*t
+    positions[i] = addVectors(positions[i], scaleVector(DT, velocities[i]));
+}
+
+void countVelocities(int i) {
+    //V = V0+a*t
+    velocities[i] = addVectors(velocities[i], scaleVector(DT, accelerations[i]));
+}
+
+void resolveCollisions(int i) {
+    for (long j = i + 1; j < bodies; j++)
+        {
+            if (positions[i].x == positions[j].x && positions[i].y == positions[j].y)
+            {
+                //If bodies collide, then we just V = V0 * -1, same speed to the opposite direction
+                pthread_mutex_lock(&bodiesMutexes[i]);
+                pthread_mutex_lock(&bodiesMutexes[j]);
+                vector temp = velocities[i];
+                velocities[i] = velocities[j];
+                velocities[j] = temp;
+                pthread_mutex_unlock(&bodiesMutexes[i]);
+                pthread_mutex_unlock(&bodiesMutexes[j]);
+            }
+        }
+}
+
+
 void* routine(void *threadArgs){
     thread_args_t *args = (thread_args_t *)threadArgs;
 
@@ -106,6 +134,22 @@ void* routine(void *threadArgs){
             }
         }
         pthread_barrier_wait(&barrier);
+        for (long i = args->startIndex; i <= args->endIndex; i++) {
+            countPositions(i);
+        }
+        pthread_barrier_wait(&barrier);
+        for (long i = args->startIndex; i <= args->endIndex; i++) {
+            countVelocities(i);
+            resolveCollisions(i);
+        }
+        int res = pthread_barrier_wait(&barrier);
+        if(res == PTHREAD_BARRIER_SERIAL_THREAD) {
+            for (int j = 0; j < bodies; j++) {
+                fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
+                        j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+            }
+        }
+
     }
     free(args);
 }

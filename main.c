@@ -143,7 +143,9 @@ void* routine(void *threadArgs){
             resolveCollisions(i);
         }
         int res = pthread_barrier_wait(&barrier);
+        //if equal, then last thread finished and now we will fall barrier, like callback onBarrierFell
         if(res == PTHREAD_BARRIER_SERIAL_THREAD) {
+            fprintf(outputFile, "\nCycle %d\n",  + 1);
             for (int j = 0; j < bodies; j++) {
                 fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
                         j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
@@ -201,7 +203,7 @@ int main(int argC, char *argV[])
     {
         int numberOfThreads = atoi(argV[2]);
         initiateSystem(argV[1], numberOfThreads);
-        outputFile = fopen("intro/oneThreadExample-output", "w");
+        outputFile = fopen("main-output", "w");
         if (outputFile == NULL) {
             perror("Error opening output file");
             return 1; 

@@ -10,12 +10,18 @@ typedef struct
     double x, y;
 } vector;
 
-int bodies, timeSteps;
+int bodies, timeSteps, bodiesPerThread;
 double *masses, GravConstant;
 vector *positions, *velocities, *accelerations;
 FILE *outputFile;
 
+typedef struct {
+    int startIndex;
+    int endIndex;
+} thread_args_t;
+
 int threadsCount;
+int extraBodiesToLastThread;
 pthread_barrier_t barrier;
 pthread_t* pthread_arr;
 
@@ -30,6 +36,9 @@ void initiateSystem(char *fileName, int numberOfThreads)
         exit(1);
     }
     fscanf(fp, "%lf%d%d", &GravConstant, &bodies, &timeSteps);
+    bodiesPerThread = bodies / numberOfThreads;
+    extraBodiesToLastThread = bodies % numberOfThreads;
+    printf("bodiesPerThread =%d, extraBodiesToLastThread=%d\n", bodiesPerThread, extraBodiesToLastThread);
 
     masses = (double *)malloc(bodies * sizeof(double));
     positions = (vector *)malloc(bodies * sizeof(vector));
@@ -55,8 +64,14 @@ void initiateSystem(char *fileName, int numberOfThreads)
     
 }
 
-void* routine(){
+void* routine(void *args){
+    thread_args_t *thread_args = (thread_args_t *)args;
 
+    printf("Thread working on index range [%d, %d]\n", thread_args->startIndex, thread_args->endIndex);
+    for (long long i = 0; i < timeSteps; i++) {
+        
+    }
+    free(args);
 }
 
 
@@ -77,12 +92,20 @@ int main(int argC, char *argV[])
         }
         fprintf(outputFile, "Body   :     x              y           vx              vy");
         for (long long i = 0; i < threadsCount; ++i){
-            pthread_create(&pthread_arr[i], NULL, routine, (void*) i);
+            thread_args_t *args = (thread_args_t *)malloc(sizeof(thread_args_t));
+            args->startIndex = i * bodiesPerThread;
+            args->endIndex = args->startIndex + bodiesPerThread - 1;
+            if (i == threadsCount - 1) {
+                args-> endIndex += extraBodiesToLastThread;
+            }
+            pthread_create(&pthread_arr[i], NULL, routine, (void *)args);
         }
 
         for (long long i = 0; i < threadsCount; ++i){
             pthread_join(pthread_arr[i], NULL);
         }
+        printf("End of program, free and close everything");
+        fclose(outputFile);
         free(pthread_arr);
         free(masses);
         free(positions);

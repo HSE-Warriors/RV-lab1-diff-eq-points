@@ -38,15 +38,12 @@ void log_vectors(const char *name, vector *array, size_t length, FILE *outputFil
         printf("Output file is empty\n");
     }
     for (size_t i = 0; i < length; i++) {
-        //pthread_mutex_lock(&bodiesMutexes[i]);
         int written = fprintf(outputFile, " (%lf, %lf)", array[i].x, array[i].y);
-
         if (written < 0) {
             // Handle error
             perror("fprintf failed");
             exit(-2);
         }           
-        //pthread_mutex_unlock(&bodiesMutexes[i]);
     }
     fprintf(outputFile,"\n");
 }
@@ -86,12 +83,7 @@ vector normalize(vector a) {
 
 
 double distanceBetweenVectors(vector a, vector b) {
-    //TODO
-    //If (distance is counted) {
-    // return it    
-    //} else {
-        return mod(subtractVectors(a, b));
-    //}
+    return mod(subtractVectors(a, b));
 }
 
 void countAcceleration(int i, int j) {
@@ -170,11 +162,8 @@ void* routine(void *threadArgs) {
         nOfFinishedThreads++;
         if(nOfFinishedThreads == nofThreads) {
             nOfFinishedThreads = 0;
-            //log_vectors("Accelerations", accelerations, bodies, accOutputFile);
-            //printf("Final thread finished acceleration\n");
             pthread_cond_broadcast(&cond_var);
         } else {
-            //printf("One of thread finished count acceleration\n");
             while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
         pthread_mutex_unlock(&threadsCounterMutex);
@@ -187,11 +176,8 @@ void* routine(void *threadArgs) {
         nOfFinishedThreads++;
         if(nOfFinishedThreads == nofThreads) {
             nOfFinishedThreads = 0;
-            //log_vectors("Positions", positions, bodies, posOutputFile);
-            //printf("Final thread finished position\n");
             pthread_cond_broadcast(&cond_var);
         } else {
-            //printf("One of thread finished count positions\n");
             while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
         pthread_mutex_unlock(&threadsCounterMutex);
@@ -206,8 +192,6 @@ void* routine(void *threadArgs) {
         nOfFinishedThreads++;
         if(nOfFinishedThreads == nofThreads) {
             nOfFinishedThreads = 0;
-            //printf("Final thread finished velocities and collisions\n");
-            //log_vectors("Velocities", velocities, bodies, velOutputFile);
             fprintf(outputFile, "\nCycle %d\n", t + 1);
             for (int j = 0; j < bodies; j++) {
                 fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
@@ -221,7 +205,6 @@ void* routine(void *threadArgs) {
             }
             pthread_cond_broadcast(&cond_var);
         } else {
-            //printf("One of thread finished count velocities and collisions\n");
             while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
         pthread_mutex_unlock(&threadsCounterMutex);

@@ -26,7 +26,7 @@ typedef struct {
 } thread_args_t;
 
 int nofThreads;
-int extraBodiesToLastThread;
+int extraBodiesToLastThread = 0;
 pthread_barrier_t barrier;
 pthread_t* pthread_arr;
 pthread_mutex_t *bodiesMutexes;
@@ -160,6 +160,7 @@ void* routine(void *threadArgs) {
         for (long i = 0; i < args->startIndex; i++) {
             //count distances
         }
+        //Accelerations
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             for (long j = i+1; j <= bodies - 1; j++) {
                 countAcceleration(i, j);
@@ -169,32 +170,44 @@ void* routine(void *threadArgs) {
         nOfFinishedThreads++;
         if(nOfFinishedThreads == nofThreads) {
             nOfFinishedThreads = 0;
-            log_vectors("Accelerations", accelerations, bodies, accOutputFile);
-            printf("Final thread finished acceleration\n");
+            //log_vectors("Accelerations", accelerations, bodies, accOutputFile);
+            //printf("Final thread finished acceleration\n");
             pthread_cond_broadcast(&cond_var);
         } else {
-            printf("One of thread finished count acceleration\n");
+            //printf("One of thread finished count acceleration\n");
             while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
         pthread_mutex_unlock(&threadsCounterMutex);
+
+        //Positions
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countPositions(i);
-            printf("One of thread finished count positions\n");
         }
-        int result = pthread_barrier_wait(&barrier);
-        if(result == PTHREAD_BARRIER_SERIAL_THREAD) {
-            log_vectors("Positions", positions, bodies, posOutputFile);
-            printf("Count positions finally finished\n");
+        pthread_mutex_lock(&threadsCounterMutex);
+        nOfFinishedThreads++;
+        if(nOfFinishedThreads == nofThreads) {
+            nOfFinishedThreads = 0;
+            //log_vectors("Positions", positions, bodies, posOutputFile);
+            //printf("Final thread finished position\n");
+            pthread_cond_broadcast(&cond_var);
+        } else {
+            //printf("One of thread finished count positions\n");
+            while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
+        pthread_mutex_unlock(&threadsCounterMutex);
 
+        
+        //Velocities and collisitons
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countVelocities(i);
             resolveCollisions(i);
         }
-        result = pthread_barrier_wait(&barrier);
-        //if equal, then last thread finished and now we will fall barrier, like callback onBarrierFell
-        if(result == PTHREAD_BARRIER_SERIAL_THREAD) {
-            log_vectors("Velocities", velocities, bodies, velOutputFile);
+        pthread_mutex_lock(&threadsCounterMutex);
+        nOfFinishedThreads++;
+        if(nOfFinishedThreads == nofThreads) {
+            nOfFinishedThreads = 0;
+            //printf("Final thread finished velocities and collisions\n");
+            //log_vectors("Velocities", velocities, bodies, velOutputFile);
             fprintf(outputFile, "\nCycle %d\n", t + 1);
             for (int j = 0; j < bodies; j++) {
                 fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
@@ -206,8 +219,12 @@ void* routine(void *threadArgs) {
                 accelerations[i].y = 0.0;
                 pthread_mutex_unlock(&bodiesMutexes[i]);
             }
+            pthread_cond_broadcast(&cond_var);
+        } else {
+            //printf("One of thread finished count velocities and collisions\n");
+            while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
         }
-
+        pthread_mutex_unlock(&threadsCounterMutex);
     }
     free(args);
 }
@@ -220,8 +237,12 @@ void initiateSystem(char *fileName, int numberOfThreads)
         exit(1);
     }
     fscanf(fp, "%lf%d%d", &GravConstant, &bodies, &timeSteps);
-    bodiesPerThread = bodies / numberOfThreads;
-    extraBodiesToLastThread = bodies % numberOfThreads;
+    if (bodies < numberOfThreads) {
+        bodiesPerThread = 1;
+    } else {
+        bodiesPerThread = bodies / numberOfThreads;
+        extraBodiesToLastThread = bodies % numberOfThreads;
+    }
 
     masses = (double *)malloc(bodies * sizeof(double));
     positions = (vector *)malloc(bodies * sizeof(vector));
@@ -239,8 +260,13 @@ void initiateSystem(char *fileName, int numberOfThreads)
     fclose(fp);
 
     pthread_mutex_init(&threadsCounterMutex, NULL);
+    if (bodies < numberOfThreads) {
+        printf("Inputed amount of bodies is less than number of threads, so actualt amout of threads is %d", numberOfThreads);
+        nofThreads = bodies;
+    } else {
+        nofThreads = numberOfThreads;
+    }
 
-    nofThreads = numberOfThreads;
     pthread_arr = malloc(nofThreads * sizeof(pthread_t));
     int rc = pthread_barrier_init(&barrier, NULL, nofThreads);
     if (rc != 0) {

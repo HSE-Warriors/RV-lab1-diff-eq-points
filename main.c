@@ -197,7 +197,7 @@ typedef struct {
 TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
     TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
     matrix->dimension = matrixDimension;
-    matrix->elements = (double*)malloc(matrixDimension * matrixDimension * sizeof(double));
+    matrix->elements = (double*)malloc(matrixDimension * (matrixDimension + 1) / 2 * sizeof(double));
     if (matrix->elements == NULL) {
         fprintf(stderr, "Memory allocation failed\n");
         exit(EXIT_FAILURE);

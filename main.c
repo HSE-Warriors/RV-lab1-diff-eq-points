@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <math.h>
 #include <pthread.h>
-#include "distanceMatrix.h"
 
 #define DT 0.05
 
@@ -18,6 +17,13 @@ typedef struct {
     int endIndex;
 } thread_args_t;
 
+typedef struct {
+    int dimension;
+    double* elements;
+    long size;
+} TriangularMatrix;
+
+
 int bodies, timeSteps, bodiesPerThread;
 double *masses, GravConstant;
 vector *positions, *velocities, *accelerations;
@@ -27,10 +33,78 @@ int nOfThreads;
 int nOfFinishedThreads = 0;
 int extraBodiesToLastThread = 0;
 
+
 pthread_t* pthread_arr;
 pthread_mutex_t *bodiesMutexes;
+pthread_mutex_t *bodiesDistancesMutexes;
 pthread_mutex_t threadsCounterMutex;
 pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
+
+
+int getIndex(int i, int j, int n) {
+    return (i * n - (i - 1) * i / 2 + j - i);
+}
+
+void SetToInitStateTriangularMatrix(TriangularMatrix* matrix) {
+    for (int i = 0; i < matrix->size; i++) {
+        matrix->elements[i] = -1.0;    
+    }
+}
+
+TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
+    TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
+    matrix->dimension = matrixDimension;
+    matrix->size = matrixDimension * (matrixDimension + 1) / 2;
+    matrix->elements = (double*)malloc(matrix->size * sizeof(double));
+    if (matrix->elements == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+    bodiesDistancesMutexes = (pthread_mutex_t *)malloc(matrix->size * sizeof(pthread_mutex_t));
+    SetToInitStateTriangularMatrix(matrix);
+    for (int i = 0; i < matrix->size; i++) {
+        pthread_mutex_init(&bodiesDistancesMutexes[i], NULL);
+    }
+
+    //        pthread_mutex_init(&bodiesDistancesMutexes[i], NULL);
+
+
+    return matrix;
+}
+
+void SetTriangularMatrixElement(TriangularMatrix* matrix, double element, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Set - It is impossible to insert an element outside the upper triangular matrix.\n");
+        return;
+    }
+    int index = getIndex(i, j, matrix->dimension);
+    pthread_mutex_lock(&bodiesDistancesMutexes[index]);
+    matrix->elements[getIndex(i, j, matrix->dimension)] = element;
+    pthread_mutex_unlock(&bodiesDistancesMutexes[index]);
+}
+
+double GetTriangularMatrixElement(TriangularMatrix* matrix, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Get - It is impossible to take an element outside the upper triangular matrix.\n");
+        return 0;
+    }
+    int index = getIndex(i, j, matrix->dimension);
+    pthread_mutex_lock(&bodiesDistancesMutexes[index]);
+    double result = matrix->elements[index];
+    pthread_mutex_unlock(&bodiesDistancesMutexes[index]);
+    return result;
+}
+
+void ClearTriangularMatrix(TriangularMatrix* matrix) {
+    if (matrix != NULL) {
+        if (matrix->elements != NULL) {
+            free(matrix->elements);
+            matrix->elements = NULL;
+        }
+        matrix->dimension = 0;
+    }
+    free(matrix);
+}
 
 void log_vectors(const char *name, vector *array, size_t length, FILE *outputFile) {
     for (size_t i = 0; i < length; i++) {
@@ -85,7 +159,12 @@ void countAcceleration(int i, int j) {
     secondMass = masses[j];
     secondPosition = positions[j];
 
-    double distance = distanceBetweenVectors(firstPosition, secondPosition);
+    double distance = GetTriangularMatrixElement(distancesMatrix, i, j);
+    if (distance == -1) {
+        distance = distanceBetweenVectors(firstPosition, secondPosition);
+        SetTriangularMatrixElement(distancesMatrix, distance, i, j);
+    }
+
     double force = GravConstant * firstMass * secondMass / (distance * distance);
     vector forceVector = scaleVector(force, normalize(subtractVectors(secondPosition, firstPosition)));
 
@@ -129,7 +208,6 @@ void resolveCollisions(int i) {
     }
 }
 
-
 //analog of pthread barrier on cond var
 void condVarWait(int value, Callback callback) {
     pthread_mutex_lock(&threadsCounterMutex);
@@ -144,7 +222,7 @@ void condVarWait(int value, Callback callback) {
     pthread_mutex_unlock(&threadsCounterMutex);
 }
 
-void printCoordsToFile_CleanAccelerations(int timestampIndex) {
+void printCoordsToFile_CleanAccelerationsAndDistances(int timestampIndex) {
     fprintf(outputFile, "\nCycle %d\n", timestampIndex + 1);
     for (int j = 0; j < bodies; j++) {
         fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
@@ -154,18 +232,22 @@ void printCoordsToFile_CleanAccelerations(int timestampIndex) {
         accelerations[i].x = 0.0;
         accelerations[i].y = 0.0;
     }
+    SetToInitStateTriangularMatrix(distancesMatrix);
 }
 
 void emptyCallback(int value) {}
-
+          
 void* routine(void *threadArgs) {
     thread_args_t *args = (thread_args_t *)threadArgs;
 
     printf("Thread working on index range [%d, %d]\n", args->startIndex, args->endIndex);
     for (long t = 0; t < timeSteps; t++) {
         //Count distances to other threads
-        for (long i = 0; i < args->startIndex; i++) {
-            //count distances
+        for (long i = args->startIndex; i <= args->endIndex; i++) {
+            for (long j = 0; j < i; j++) {
+                double distance = distanceBetweenVectors(positions[i], positions[j]);
+                SetTriangularMatrixElement(distancesMatrix, distance, j, i);
+            }
         }
         //Accelerations
         for (long i = args->startIndex; i <= args->endIndex; i++) {
@@ -186,7 +268,7 @@ void* routine(void *threadArgs) {
             countVelocities(i);
             resolveCollisions(i);
         }
-        condVarWait(t, printCoordsToFile_CleanAccelerations);
+        condVarWait(t, printCoordsToFile_CleanAccelerationsAndDistances);
     }
     free(args);
 }

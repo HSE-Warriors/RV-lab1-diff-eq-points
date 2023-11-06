@@ -256,7 +256,7 @@ void* routine(void *threadArgs) {
             }
         }
         condVarWait(0, emptyCallback);
-
+        int debug = 0;
         //Positions
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countPositions(i);

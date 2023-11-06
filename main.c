@@ -10,40 +10,105 @@ typedef struct
     double x, y;
 } vector;
 
-int bodies, timeSteps, bodiesPerThread;
-double *masses, GravConstant;
-vector *positions, *velocities, *accelerations;
-FILE *outputFile;
-int nOfFinishedThreads = 0;
-
-FILE *accOutputFile;
-FILE *posOutputFile;
-FILE *velOutputFile;
+typedef void (*Callback)(int);
 
 typedef struct {
     int startIndex;
     int endIndex;
 } thread_args_t;
 
-int nofThreads;
+typedef struct {
+    int dimension;
+    double* elements;
+    long size;
+} TriangularMatrix;
+
+
+int bodies, timeSteps, bodiesPerThread;
+double *masses, GravConstant;
+vector *positions, *velocities, *accelerations;
+TriangularMatrix *distancesMatrix;
+FILE *outputFile;
+int nOfThreads;
+int nOfFinishedThreads = 0;
 int extraBodiesToLastThread = 0;
-pthread_barrier_t barrier;
+
+
 pthread_t* pthread_arr;
 pthread_mutex_t *bodiesMutexes;
+pthread_mutex_t *bodiesDistancesMutexes;
 pthread_mutex_t threadsCounterMutex;
 pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
 
-void log_vectors(const char *name, vector *array, size_t length, FILE *outputFile) {
-    if (outputFile == NULL) {
-        printf("Output file is empty\n");
+
+int getIndex(int i, int j, int n) {
+    return (i * n - (i - 1) * i / 2 + j - i);
+}
+
+void SetToInitStateTriangularMatrix(TriangularMatrix* matrix) {
+    for (int i = 0; i < matrix->size; i++) {
+        matrix->elements[i] = -1.0;    
     }
+}
+
+TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
+    TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
+    matrix->dimension = matrixDimension;
+    matrix->size = matrixDimension * (matrixDimension + 1) / 2;
+    matrix->elements = (double*)malloc(matrix->size * sizeof(double));
+    if (matrix->elements == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+    bodiesDistancesMutexes = (pthread_mutex_t *)malloc(matrix->size * sizeof(pthread_mutex_t));
+    SetToInitStateTriangularMatrix(matrix);
+    for (int i = 0; i < matrix->size; i++) {
+        pthread_mutex_init(&bodiesDistancesMutexes[i], NULL);
+    }
+
+    //        pthread_mutex_init(&bodiesDistancesMutexes[i], NULL);
+
+
+    return matrix;
+}
+
+void SetTriangularMatrixElement(TriangularMatrix* matrix, double element, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Set - It is impossible to insert an element outside the upper triangular matrix.\n");
+        return;
+    }
+    int index = getIndex(i, j, matrix->dimension);
+    pthread_mutex_lock(&bodiesDistancesMutexes[index]);
+    matrix->elements[getIndex(i, j, matrix->dimension)] = element;
+    pthread_mutex_unlock(&bodiesDistancesMutexes[index]);
+}
+
+double GetTriangularMatrixElement(TriangularMatrix* matrix, int i, int j) {
+    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
+        printf("Get - It is impossible to take an element outside the upper triangular matrix.\n");
+        return 0;
+    }
+    int index = getIndex(i, j, matrix->dimension);
+    pthread_mutex_lock(&bodiesDistancesMutexes[index]);
+    double result = matrix->elements[index];
+    pthread_mutex_unlock(&bodiesDistancesMutexes[index]);
+    return result;
+}
+
+void ClearTriangularMatrix(TriangularMatrix* matrix) {
+    if (matrix != NULL) {
+        if (matrix->elements != NULL) {
+            free(matrix->elements);
+            matrix->elements = NULL;
+        }
+        matrix->dimension = 0;
+    }
+    free(matrix);
+}
+
+void log_vectors(const char *name, vector *array, size_t length, FILE *outputFile) {
     for (size_t i = 0; i < length; i++) {
-        int written = fprintf(outputFile, " (%lf, %lf)", array[i].x, array[i].y);
-        if (written < 0) {
-            // Handle error
-            perror("fprintf failed");
-            exit(-2);
-        }           
+        fprintf(outputFile, " (%lf, %lf)", array[i].x, array[i].y);
     }
     fprintf(outputFile,"\n");
 }
@@ -89,22 +154,23 @@ void countAcceleration(int i, int j) {
     double firstMass, secondMass;
     vector firstPosition, secondPosition;
 
-    pthread_mutex_lock(&bodiesMutexes[i]);
     firstMass = masses[i];
     firstPosition = positions[i];
-    pthread_mutex_unlock(&bodiesMutexes[i]);
-
-    pthread_mutex_lock(&bodiesMutexes[j]);
     secondMass = masses[j];
     secondPosition = positions[j];
-    pthread_mutex_unlock(&bodiesMutexes[j]);
 
-    double distance = distanceBetweenVectors(firstPosition, secondPosition);
+    double distance = GetTriangularMatrixElement(distancesMatrix, i, j);
+    if (distance == -1) {
+        distance = distanceBetweenVectors(firstPosition, secondPosition);
+        SetTriangularMatrixElement(distancesMatrix, distance, i, j);
+    }
+
     double force = GravConstant * firstMass * secondMass / (distance * distance);
     vector forceVector = scaleVector(force, normalize(subtractVectors(secondPosition, firstPosition)));
 
     vector firstNewAcceleration = scaleVector(1.0 / firstMass, forceVector);
     vector secondNewAcceleration = scaleVector(-1.0 / secondMass, forceVector);
+
 
     pthread_mutex_lock(&bodiesMutexes[i]);
     accelerations[i] = addVectors(accelerations[i], firstNewAcceleration);
@@ -142,14 +208,46 @@ void resolveCollisions(int i) {
     }
 }
 
+//analog of pthread barrier on cond var
+void condVarWait(int value, Callback callback) {
+    pthread_mutex_lock(&threadsCounterMutex);
+    nOfFinishedThreads++;
+    if(nOfFinishedThreads == nOfThreads) {
+        callback(value);
+        nOfFinishedThreads = 0;
+        pthread_cond_broadcast(&cond_var);
+    } else {
+        while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
+    }
+    pthread_mutex_unlock(&threadsCounterMutex);
+}
+
+void printCoordsToFile_CleanAccelerationsAndDistances(int timestampIndex) {
+    fprintf(outputFile, "\nCycle %d\n", timestampIndex + 1);
+    for (int j = 0; j < bodies; j++) {
+        fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
+            j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
+    }
+    for (size_t i = 0; i < bodies; ++i) {
+        accelerations[i].x = 0.0;
+        accelerations[i].y = 0.0;
+    }
+    SetToInitStateTriangularMatrix(distancesMatrix);
+}
+
+void emptyCallback(int value) {}
+          
 void* routine(void *threadArgs) {
     thread_args_t *args = (thread_args_t *)threadArgs;
 
     printf("Thread working on index range [%d, %d]\n", args->startIndex, args->endIndex);
     for (long t = 0; t < timeSteps; t++) {
         //Count distances to other threads
-        for (long i = 0; i < args->startIndex; i++) {
-            //count distances
+        for (long i = args->startIndex; i <= args->endIndex; i++) {
+            for (long j = 0; j < i; j++) {
+                double distance = distanceBetweenVectors(positions[i], positions[j]);
+                SetTriangularMatrixElement(distancesMatrix, distance, j, i);
+            }
         }
         //Accelerations
         for (long i = args->startIndex; i <= args->endIndex; i++) {
@@ -157,56 +255,20 @@ void* routine(void *threadArgs) {
                 countAcceleration(i, j);
             }
         }
-        pthread_mutex_lock(&threadsCounterMutex);
-        nOfFinishedThreads++;
-        if(nOfFinishedThreads == nofThreads) {
-            nOfFinishedThreads = 0;
-            pthread_cond_broadcast(&cond_var);
-        } else {
-            while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
-        }
-        pthread_mutex_unlock(&threadsCounterMutex);
+        condVarWait(0, emptyCallback);
 
         //Positions
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countPositions(i);
         }
-        pthread_mutex_lock(&threadsCounterMutex);
-        nOfFinishedThreads++;
-        if(nOfFinishedThreads == nofThreads) {
-            nOfFinishedThreads = 0;
-            pthread_cond_broadcast(&cond_var);
-        } else {
-            while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
-        }
-        pthread_mutex_unlock(&threadsCounterMutex);
+        condVarWait(0, emptyCallback);
 
-        
         //Velocities and collisitons
         for (long i = args->startIndex; i <= args->endIndex; i++) {
             countVelocities(i);
             resolveCollisions(i);
         }
-        pthread_mutex_lock(&threadsCounterMutex);
-        nOfFinishedThreads++;
-        if(nOfFinishedThreads == nofThreads) {
-            nOfFinishedThreads = 0;
-            fprintf(outputFile, "\nCycle %d\n", t + 1);
-            for (int j = 0; j < bodies; j++) {
-                fprintf(outputFile, "Body %d : %lf\t%lf\t%lf\t%lf\n",
-                    j + 1, positions[j].x, positions[j].y, velocities[j].x, velocities[j].y);
-            }
-            for (size_t i = 0; i < bodies; ++i) {
-                pthread_mutex_lock(&bodiesMutexes[i]);
-                accelerations[i].x = 0.0;
-                accelerations[i].y = 0.0;
-                pthread_mutex_unlock(&bodiesMutexes[i]);
-            }
-            pthread_cond_broadcast(&cond_var);
-        } else {
-            while(pthread_cond_wait(&cond_var, &threadsCounterMutex) != 0);
-        }
-        pthread_mutex_unlock(&threadsCounterMutex);
+        condVarWait(t, printCoordsToFile_CleanAccelerationsAndDistances);
     }
     free(args);
 }
@@ -214,24 +276,15 @@ void* routine(void *threadArgs) {
 void initiateSystem(char *fileName, int numberOfThreads)
 {
     FILE *fp = fopen(fileName, "r");
-    if (fp == NULL) {
-        perror("Error opening file");
-        exit(1);
-    }
     fscanf(fp, "%lf%d%d", &GravConstant, &bodies, &timeSteps);
-    if (bodies < numberOfThreads) {
-        bodiesPerThread = 1;
-    } else {
-        bodiesPerThread = bodies / numberOfThreads;
-        extraBodiesToLastThread = bodies % numberOfThreads;
-    }
 
+    bodiesMutexes = (pthread_mutex_t *)malloc(bodies * sizeof(pthread_mutex_t));
     masses = (double *)malloc(bodies * sizeof(double));
     positions = (vector *)malloc(bodies * sizeof(vector));
     velocities = (vector *)malloc(bodies * sizeof(vector));
     accelerations = (vector *)malloc(bodies * sizeof(vector));
-    bodiesMutexes = (pthread_mutex_t *)malloc(bodies * sizeof(pthread_mutex_t));
-
+    distancesMatrix = CreateTriangularMatrix(bodies);
+    
     for (int i = 0; i < bodies; i++)
     {
         fscanf(fp, "%lf", &masses[i]);
@@ -241,78 +294,21 @@ void initiateSystem(char *fileName, int numberOfThreads)
     }
     fclose(fp);
 
+    if (bodies < numberOfThreads) {
+        bodiesPerThread = 1; //no reason to spread to more threads than bodies, so limit to 1:1
+    } else {
+        bodiesPerThread = bodies / numberOfThreads;
+        extraBodiesToLastThread = bodies % numberOfThreads;
+    }
+
     pthread_mutex_init(&threadsCounterMutex, NULL);
     if (bodies < numberOfThreads) {
-        printf("Inputed amount of bodies is less than number of threads, so actualt amout of threads is %d", numberOfThreads);
-        nofThreads = bodies;
+        printf("Amount of bodies is less than number of threads, so actualt amout of threads is %d", numberOfThreads);
+        nOfThreads = bodies;
     } else {
-        nofThreads = numberOfThreads;
+        nOfThreads = numberOfThreads;
     }
-
-    pthread_arr = malloc(nofThreads * sizeof(pthread_t));
-    int rc = pthread_barrier_init(&barrier, NULL, nofThreads);
-    if (rc != 0) {
-        perror("Error with barrier init");
-        exit(1);
-    } 
-
-    accOutputFile = fopen("acccelerationsOutput", "w");
-    if (accOutputFile == NULL) {
-        printf("Acc error");
-        perror("Can`t open file");
-    }
-    posOutputFile = fopen("positionsOutput", "w");
-    velOutputFile = fopen("velocitiesOutput", "w");
-}
-
-typedef struct {
-    int dimension;
-    double* elements;
-} TriangularMatrix;
-
-TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
-    TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
-    matrix->dimension = matrixDimension;
-    matrix->elements = (double*)malloc(matrixDimension * (matrixDimension + 1) / 2 * sizeof(double));
-    if (matrix->elements == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return matrix;
-}
-
-int getIndex(int i, int j, int n) {
-    return (i * n - (i - 1) * i / 2 + j - i);
-}
-
-void SetTriangularMatrixElement(TriangularMatrix* matrix, double element, int i, int j) {
-    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
-        printf("Невозможно вставить элемент вне верхней треугольной матрицы.\n");
-        return;
-    }
-
-    matrix->elements[getIndex(i, j, matrix->dimension)] = element;
-}
-
-double GetTriangularMatrixElement(TriangularMatrix* matrix, int i, int j) {
-    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
-        printf("Невозможно взять элемент вне верхней треугольной матрицы.\n");
-        return 0;
-    }
-    return matrix->elements[getIndex(i, j, matrix->dimension)];
-}
-
-void ClearTriangularMatrix(TriangularMatrix* matrix) {
-    if (matrix != NULL) {
-        if (matrix->elements != NULL) {
-            free(matrix->elements);
-            matrix->elements = NULL;
-        }
-        matrix->dimension = 0;
-    }
-
-    free(matrix);
+    pthread_arr = malloc(nOfThreads * sizeof(pthread_t));
 }
 
 int main(int argC, char *argV[])
@@ -322,41 +318,33 @@ int main(int argC, char *argV[])
         printf("Usage : %s <file name containing system configuration data>\n", argV[0]);
     else
     {
-        int numberOfThreads = atoi(argV[2]);
-        initiateSystem(argV[1], numberOfThreads);
+        initiateSystem(argV[1], atoi(argV[2]));
         outputFile = fopen("main-output", "w");
-        if (outputFile == NULL) {
-            perror("Error opening output file");
-            return 1; 
-        }
         fprintf(outputFile, "Body   :     x              y           vx              vy");
-        for (long long i = 0; i < nofThreads; ++i){
+        for (long long i = 0; i < nOfThreads; ++i){
             thread_args_t *args = (thread_args_t *)malloc(sizeof(thread_args_t));
             args->startIndex = i * bodiesPerThread;
             args->endIndex = args->startIndex + bodiesPerThread - 1;
-            if (i == nofThreads - 1) {
+            if (i == nOfThreads - 1) {
                 args-> endIndex += extraBodiesToLastThread;
             }
+
             pthread_create(&pthread_arr[i], NULL, routine, (void *)args);
         }
-
-        for (long long i = 0; i < nofThreads; ++i){
+        for (long long i = 0; i < nOfThreads; ++i){
             pthread_join(pthread_arr[i], NULL);
         }
-        printf("End of program, free and close everything");
+
+        printf("End of program");
         fclose(outputFile);
         free(pthread_arr);
         free(masses);
         free(positions);
         free(velocities);
         free(accelerations);
-        pthread_barrier_destroy(&barrier);
         for (int i = 0; i < bodies; i++) {
             pthread_mutex_destroy(&bodiesMutexes[i]);
         }
         pthread_mutex_destroy(&threadsCounterMutex);
-        fclose(accOutputFile);
-        fclose(posOutputFile);
-        fclose(velOutputFile);
     }
 }

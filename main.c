@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <pthread.h>
+#include "distanceMatrix.h"
 
 #define DT 0.05
 
@@ -17,20 +18,15 @@ typedef struct {
     int endIndex;
 } thread_args_t;
 
-typedef struct {
-    int dimension;
-    double* elements;
-} TriangularMatrix;
-
-
 int bodies, timeSteps, bodiesPerThread;
 double *masses, GravConstant;
 vector *positions, *velocities, *accelerations;
+TriangularMatrix *distancesMatrix;
 FILE *outputFile;
-int nOfFinishedThreads = 0;
-
 int nOfThreads;
+int nOfFinishedThreads = 0;
 int extraBodiesToLastThread = 0;
+
 pthread_t* pthread_arr;
 pthread_mutex_t *bodiesMutexes;
 pthread_mutex_t threadsCounterMutex;
@@ -133,50 +129,7 @@ void resolveCollisions(int i) {
     }
 }
 
-int getIndex(int i, int j, int n) {
-    return (i * n - (i - 1) * i / 2 + j - i);
-}
 
-TriangularMatrix* CreateTriangularMatrix(int matrixDimension) {
-    TriangularMatrix* matrix = (TriangularMatrix*)malloc(sizeof(TriangularMatrix));
-    matrix->dimension = matrixDimension;
-    matrix->elements = (double*)malloc(matrixDimension * (matrixDimension + 1) / 2 * sizeof(double));
-    if (matrix->elements == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return matrix;
-}
-
-void SetTriangularMatrixElement(TriangularMatrix* matrix, double element, int i, int j) {
-    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
-        printf("It is impossible to insert an element outside the upper triangular matrix.\n");
-        return;
-    }
-
-    matrix->elements[getIndex(i, j, matrix->dimension)] = element;
-}
-
-double GetTriangularMatrixElement(TriangularMatrix* matrix, int i, int j) {
-    if (i > j || i >= matrix->dimension || j >= matrix->dimension) {
-        printf("It is impossible to take an element outside the upper triangular matrix.\n");
-        return 0;
-    }
-    return matrix->elements[getIndex(i, j, matrix->dimension)];
-}
-
-void ClearTriangularMatrix(TriangularMatrix* matrix) {
-    if (matrix != NULL) {
-        if (matrix->elements != NULL) {
-            free(matrix->elements);
-            matrix->elements = NULL;
-        }
-        matrix->dimension = 0;
-    }
-
-    free(matrix);
-}
 //analog of pthread barrier on cond var
 void condVarWait(int value, Callback callback) {
     pthread_mutex_lock(&threadsCounterMutex);
@@ -248,6 +201,7 @@ void initiateSystem(char *fileName, int numberOfThreads)
     positions = (vector *)malloc(bodies * sizeof(vector));
     velocities = (vector *)malloc(bodies * sizeof(vector));
     accelerations = (vector *)malloc(bodies * sizeof(vector));
+    distancesMatrix = CreateTriangularMatrix(bodies);
     
     for (int i = 0; i < bodies; i++)
     {
